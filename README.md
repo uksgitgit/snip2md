@@ -4,6 +4,8 @@ Windows app: snip a screen region (like Snipping Tool) and get GitHub-flavored M
 
 Local OCR by default (RapidOCR, typically well under a second after warmup). Optional AI polish uses your existing **Cursor** or **Claude** subscription — no pasted API keys.
 
+**Repo:** [github.com/uksgitgit/snip2md](https://github.com/uksgitgit/snip2md)
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ## Requirements
@@ -36,7 +38,7 @@ npm install
 
 1. **Change shortcut** if you do not want the default. Combos are saved in `%USERPROFILE%\.snip2md\settings.json`.
 2. Press the shortcut (or click **+**).
-3. Drag a rectangle. Release. Markdown is copied from local OCR.
+3. Drag a rectangle. Release. Markdown is copied as soon as RapidOCR finishes (usually well under a second). Windows OCR may refine Danish letters a moment later if it reads them better.
 4. Optional: tick **AI polish** and pick Auto / Cursor / Claude.
 
 **Esc** cancels a snip.

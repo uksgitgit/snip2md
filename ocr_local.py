@@ -1,7 +1,7 @@
 """Local OCR — no cloud, no subscription.
 
-Primary engine is RapidOCR with a Latin recognition model (Danish + English
-UI text, typically well under a second after warmup). Windows.Media.Ocr is
+Primary engine is RapidOCR with a Latin recognition model
+(typically well under a second after warmup). Windows.Media.Ocr is
 the fallback. Layout uses word/line boxes so three-column dashboards are
 not read left-to-right.
 """
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 from PIL import Image
@@ -35,17 +36,42 @@ def warmup_ocr() -> None:
         return
 
 
-def image_to_markdown_ocr(pil_image: Image.Image) -> str:
+def image_to_markdown_ocr(
+    pil_image: Image.Image,
+    *,
+    on_markdown: Callable[[str], None] | None = None,
+) -> str:
+    """Local OCR → Markdown.
+
+    RapidOCR is emitted first (clipboard can copy immediately). Windows OCR
+    runs next and replaces the result only when it is clearly better
+    (typically Danish æøå).
+    """
     rgb = pil_image.convert("RGB")
     rapid_error: BaseException | None = None
+    rapid_words: list[Word] = []
     try:
-        text = _recognize_rapid(rgb)
-        if text:
-            return text
+        rapid_words = _rapid_words(rgb)
     except Exception as exc:
         rapid_error = exc
+    if rapid_words:
+        markdown = words_to_markdown(rapid_words, rgb.width, rgb.height)
+        if markdown and on_markdown:
+            on_markdown(markdown)
+        windows_words = _try_windows_words(rgb)
+        chosen = _prefer_words(rapid_words, windows_words)
+        if chosen is not rapid_words:
+            refined = words_to_markdown(chosen, rgb.width, rgb.height)
+            if refined and refined != markdown:
+                if on_markdown:
+                    on_markdown(refined)
+                markdown = refined
+        return markdown
     try:
-        return _recognize_windows(rgb)
+        text = _recognize_windows(rgb)
+        if text and on_markdown:
+            on_markdown(text)
+        return text
     except ProviderError:
         if rapid_error is not None:
             raise ProviderError(
@@ -91,13 +117,67 @@ def _get_rapid_engine():
         return _rapid_engine
 
 
-def _recognize_rapid(rgb: Image.Image) -> str:
+def _rapid_words(rgb: Image.Image) -> list[Word]:
     engine = _get_rapid_engine()
     result = engine(rgb)
-    words = _words_from_rapid(result)
-    if not words:
-        return ""
-    return words_to_markdown(words, rgb.width, rgb.height)
+    return _words_from_rapid(result)
+
+
+def _diacritic_count(words: list[Word]) -> int:
+    marks = "æøåäöüßéèêáàóòúùÆØÅÄÖÜÉ"
+    return sum(char in marks for word in words for char in word[4])
+
+
+def _ocr_quality(words: list[Word]) -> int:
+    text = " ".join(word[4] for word in words)
+    letters = sum(char.isalpha() for char in text)
+    return _diacritic_count(words) * 8 + letters + min(len(words), 80)
+
+
+def _prefer_words(rapid: list[Word], windows: list[Word]) -> list[Word]:
+    if not windows:
+        return rapid
+    if not rapid:
+        return windows
+    if len(windows) < max(4, int(len(rapid) * 0.5)):
+        return rapid
+    if _diacritic_count(windows) >= _diacritic_count(rapid) + 2:
+        return windows
+    if _ocr_quality(windows) > _ocr_quality(rapid):
+        return windows
+    return rapid
+
+
+def _try_windows_words(rgb: Image.Image) -> list[Word]:
+    try:
+        return asyncio.run(_windows_best_words(rgb))
+    except Exception:
+        return []
+
+
+async def _windows_best_words(rgb: Image.Image) -> list[Word]:
+    try:
+        import winocr
+    except ImportError:
+        return []
+    langs = _windows_ocr_languages()
+    if not langs:
+        return []
+    best: list[Word] = []
+    best_score = -1
+    for lang in langs[:2]:
+        try:
+            result = await winocr.recognize_pil(rgb, lang)
+        except Exception:
+            continue
+        if result is None:
+            continue
+        words = _words_from_windows(result)
+        score = _ocr_quality(words)
+        if score > best_score:
+            best_score = score
+            best = words
+    return best
 
 
 def _box_xywh(box) -> tuple[float, float, float, float]:
@@ -129,7 +209,6 @@ def _words_from_rapid(result) -> list[Word]:
         box = boxes[index]
         if not _keep_rapid_line(text, score, box):
             continue
-        text = text.replace("ä", "å").replace("Ä", "Å")
         y, x, width, height = _box_xywh(box)
         words.append((y, x, max(width, 1.0), max(height, 1.0), text))
     return words
@@ -146,6 +225,37 @@ def _recognize_windows(rgb: Image.Image) -> str:
         ) from exc
 
 
+def _windows_ocr_languages() -> list[str]:
+    """Language tags Windows has an OCR pack for — not a hardcoded locale list."""
+    from winrt.windows.media.ocr import OcrEngine
+
+    tags: list[str] = []
+    seen: set[str] = set()
+
+    def add(tag: object) -> None:
+        value = str(tag or "").strip()
+        if not value:
+            return
+        key = value.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        tags.append(value)
+
+    try:
+        engine = OcrEngine.try_create_from_user_profile_languages()
+        if engine is not None:
+            add(getattr(engine.recognizer_language, "language_tag", None))
+    except Exception:
+        pass
+    try:
+        for item in OcrEngine.available_recognizer_languages:
+            add(getattr(item, "language_tag", None))
+    except Exception:
+        pass
+    return tags
+
+
 async def _recognize_windows_async(rgb: Image.Image) -> str:
     try:
         import winocr
@@ -154,44 +264,63 @@ async def _recognize_windows_async(rgb: Image.Image) -> str:
             "Missing Windows OCR. Run: pip install -r requirements.txt"
         ) from exc
 
-    result = None
+    langs = _windows_ocr_languages()
+    if not langs:
+        raise ProviderError(
+            "Windows OCR has no language packs. Install one in Windows settings."
+        )
+
+    best = ""
+    best_score = -1
     last_error: Exception | None = None
-    for lang in ("da", "da-DK", "en-US"):
+    for lang in langs:
         try:
             result = await winocr.recognize_pil(rgb, lang)
-            if result is not None:
-                break
         except Exception as exc:
             last_error = exc
             continue
-    if result is None:
+        if result is None:
+            continue
+        text = lines_to_markdown(result, rgb.width, rgb.height)
+        score = sum(char.isalnum() for char in text)
+        if score > best_score:
+            best_score = score
+            best = text
+    if best_score < 0:
         raise ProviderError("Windows OCR could not read that region.") from last_error
-    text = lines_to_markdown(result, rgb.width, rgb.height)
-    if not text:
+    if not best:
         raise ProviderError("OCR found no text in that region.")
-    return text
+    return best
 
 
 def _words_from_windows(result) -> list[Word]:
+    """One box per OCR line so short words (du, vi, og) are not dropped."""
     words: list[Word] = []
     for line in getattr(result, "lines", None) or ():
+        token = str(getattr(line, "text", "") or "").strip()
+        if not token:
+            continue
+        boxes: list[tuple[float, float, float, float]] = []
         for word in getattr(line, "words", None) or ():
-            token = str(getattr(word, "text", "") or "").strip()
-            if not token:
-                continue
             box = getattr(word, "bounding_rect", None)
             if box is None:
-                words.append((0.0, float(len(words)), 8.0, 12.0, token))
                 continue
-            words.append(
+            boxes.append(
                 (
                     float(getattr(box, "y", 0.0) or 0.0),
                     float(getattr(box, "x", 0.0) or 0.0),
                     float(getattr(box, "width", 0.0) or 8.0),
                     float(getattr(box, "height", 0.0) or 12.0),
-                    token,
                 )
             )
+        if boxes:
+            top = min(item[0] for item in boxes)
+            left = min(item[1] for item in boxes)
+            right = max(item[1] + item[2] for item in boxes)
+            bottom = max(item[0] + item[3] for item in boxes)
+            words.append((top, left, max(right - left, 1.0), max(bottom - top, 1.0), token))
+        else:
+            words.append((float(len(words) * 16), 0.0, 8.0, 12.0, token))
     return words
 
 

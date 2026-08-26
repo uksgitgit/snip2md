@@ -589,7 +589,7 @@ class Snip2MdApp:
         if self._hotkey.fired.is_set():
             self._hotkey.fired.clear()
             self.start_snip()
-        self.root.after(40, self._poll_hotkey)
+        self.root.after(16, self._poll_hotkey)
 
     def start_snip(self) -> None:
         if self.busy or self._capturing_hotkey:
@@ -598,7 +598,7 @@ class Snip2MdApp:
         self.snip_btn.configure(state="disabled", text="…")
         self.note_var.set("Drag a rectangle. Esc cancels.")
         self.root.withdraw()
-        self.root.after(180, self._run_overlay)
+        self.root.after(70, self._run_overlay)
 
     def _run_overlay(self) -> None:
         overlay = SnipOverlay(self.root)
@@ -620,14 +620,48 @@ class Snip2MdApp:
             return
         self.snip_btn.configure(text="…")
         self.note_var.set("Reading text locally…")
-        threading.Thread(target=self._convert, args=(img,), daemon=True).start()
+        polish = self._can_polish()
+        threading.Thread(
+            target=self._convert, args=(img, polish), daemon=True
+        ).start()
 
-    def _convert(self, img) -> None:
+    def _push_clipboard(self, markdown: str, *, replace: str | None = None) -> bool:
+        """Copy markdown. If replace is set, do not clobber a different clipboard."""
+        try:
+            if replace:
+                try:
+                    current = pyperclip.paste()
+                except Exception:
+                    current = replace
+                if current not in (replace, markdown):
+                    return False
+            pyperclip.copy(markdown)
+            return True
+        except Exception:
+            return False
+
+    def _convert(self, img, polish: bool) -> None:
         self._snip_id += 1
         snip_id = self._snip_id
-        started = time.monotonic()
+        emitted: dict[str, str] = {"md": ""}
+
+        def on_markdown(text: str) -> None:
+            first = not emitted["md"]
+            previous = emitted["md"]
+            emitted["md"] = text
+            if first:
+                self._push_clipboard(text)
+            else:
+                self._push_clipboard(text, replace=previous)
+            self.root.after(
+                0,
+                lambda t=text, flag=first: self._on_ocr_progress(
+                    snip_id, t, flag, img, polish
+                ),
+            )
+
         try:
-            markdown = image_to_markdown_ocr(img)
+            markdown = image_to_markdown_ocr(img, on_markdown=on_markdown)
             error = None
         except ProviderError as exc:
             markdown = ""
@@ -635,23 +669,41 @@ class Snip2MdApp:
         except Exception as exc:
             markdown = ""
             error = public_error_message(exc)
-        elapsed = time.monotonic() - started
-        polish = self._can_polish() and not error and bool(markdown)
         self.root.after(
             0,
-            lambda: self._finish_ocr(snip_id, markdown, error, elapsed, polish),
+            lambda: self._finish_ocr(
+                snip_id, emitted["md"] or markdown, error, polish
+            ),
         )
-        if polish:
-            threading.Thread(
-                target=self._polish, args=(snip_id, img, markdown), daemon=True
-            ).start()
+
+    def _on_ocr_progress(
+        self,
+        snip_id: int,
+        markdown: str,
+        first: bool,
+        img,
+        polish: bool,
+    ) -> None:
+        if snip_id != self._snip_id:
+            return
+        self.last_markdown = markdown
+        self.preview.configure(state="normal")
+        self.preview.delete("1.0", "end")
+        self.preview.insert("1.0", markdown)
+        self.preview.configure(state="disabled")
+        if first:
+            self._flash_copied()
+            self.note_var.set("Copied. Ctrl+V to paste.")
+            if polish:
+                threading.Thread(
+                    target=self._polish, args=(snip_id, img, markdown), daemon=True
+                ).start()
 
     def _finish_ocr(
         self,
         snip_id: int,
         markdown: str,
         error: str | None,
-        elapsed: float,
         polish: bool,
     ) -> None:
         if snip_id != self._snip_id:
@@ -662,16 +714,15 @@ class Snip2MdApp:
         if not markdown:
             self._idle("Nothing came back. Try snipping a bit more.")
             return
-        copied = self._apply_markdown(markdown)
-        if not copied:
-            self._idle("Markdown is ready, but clipboard copy failed. Use Copy again.")
-            return
+        if self.last_markdown != markdown:
+            copied = self._apply_markdown(markdown)
+            if not copied:
+                self._idle("Markdown is ready, but clipboard copy failed. Use Copy again.")
+                return
         if polish:
-            self._idle(
-                f"Copied in {elapsed:.1f}s. AI polish running in the background…"
-            )
+            self._idle("On the clipboard. AI polish running in the background…")
         else:
-            self._idle(f"Copied in {elapsed:.1f}s. Ctrl+V to paste.")
+            self._idle("On the clipboard. Ctrl+V to paste.")
 
     def _polish(self, snip_id: int, img, ocr_markdown: str) -> None:
         started = time.monotonic()

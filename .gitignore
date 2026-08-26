@@ -12,3 +12,6 @@ build/
 .env.*
 *.onnx
 last-error.txt
+share/*-layout-check.md
+share/*.lnk
+

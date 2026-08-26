@@ -1,5 +1,5 @@
 """
-snip2md — snip a screen region like Klippeværktøj, get structured Markdown
+snip2md — snip a screen region like Snipping Tool, get structured Markdown
 on your clipboard.
 
 Runs locally. Uses the Claude subscription you already sign in with
@@ -235,8 +235,11 @@ def do_snip():
 
         print("Captured — reading text locally...")
         img = ImageGrab.grab(bbox=bbox, all_screens=True)
-        markdown = image_to_markdown_ocr(img)
-        pyperclip.copy(markdown)
+
+        def on_markdown(text: str) -> None:
+            pyperclip.copy(text)
+
+        markdown = image_to_markdown_ocr(img, on_markdown=on_markdown)
         preview = markdown[:80].replace("\n", " ")
         print(f"OCR copied — {len(markdown)} chars. Preview: {preview}...")
         if not ai_polish_enabled():
@@ -533,6 +536,16 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _detach_windows_console() -> None:
+    """Drop the launcher console so python.exe does not leave a terminal open."""
+    if sys.platform != "win32":
+        return
+    try:
+        kernel32.FreeConsole()
+    except Exception:
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -544,6 +557,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if command == "cli":
         return cmd_run_cli()
+    _detach_windows_console()
     from ui import run_app
 
     return run_app()

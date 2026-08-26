@@ -24,12 +24,24 @@ if ($npm) {
 }
 
 function New-SnipShortcut([string]$Path) {
+    $pythonw = Join-Path $Root ".venv\Scripts\pythonw.exe"
+    if (-not (Test-Path $pythonw)) {
+        $pythonw = (Get-Command pythonw -ErrorAction SilentlyContinue).Source
+    }
+    if (-not $pythonw) {
+        $pythonw = $exe
+    }
     $shell = New-Object -ComObject WScript.Shell
     $link = $shell.CreateShortcut($Path)
-    $link.TargetPath = $exe
+    $link.TargetPath = $pythonw
+    $link.Arguments = "`"$Root\snip2md.py`""
     $link.WorkingDirectory = $Root
-    $link.WindowStyle = 7
+    $link.WindowStyle = 1
     $link.Description = "Snip a screen region to Markdown"
+    $ico = Join-Path $Root "share\snip2md.ico"
+    if (Test-Path $ico) {
+        $link.IconLocation = "$ico,0"
+    }
     $link.Save()
 }
 
@@ -39,7 +51,5 @@ New-SnipShortcut (Join-Path $startDir "Snip2MD.lnk")
 New-SnipShortcut (Join-Path $env:USERPROFILE "Desktop\Snip2MD.lnk")
 
 Write-Host ""
-Write-Host "Installed. Start Menu and Desktop shortcuts point at:"
-Write-Host "  $exe"
-Write-Host "Launch with:  $exe"
-Write-Host "or double-click Start Snip2MD.bat"
+Write-Host "Installed. Start Menu and Desktop shortcuts launch pythonw (no console)."
+Write-Host "Or double-click Start Snip2MD.bat / Start Snip2MD.vbs"

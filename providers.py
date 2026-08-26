@@ -27,9 +27,9 @@ import time
 from pathlib import Path
 
 PROMPT = (
-    "Transcribe this Danish UI screenshot into GitHub-flavored Markdown "
+    "Transcribe this UI screenshot into GitHub-flavored Markdown "
     "for a coding agent. Copy labels, values, buttons, links, and table "
-    "cells exactly (keep å/æ/ø). ATX headings only for on-screen titles. "
+    "cells exactly (keep letters such as å/æ/ø if present). ATX headings only for on-screen titles. "
     "Label/value rows become one GFM table (label | value). "
     "Checklist or timeline steps become a bullet list. "
     "Metric cards: one GFM table, value then caption, no HTML <br>. "
@@ -65,6 +65,23 @@ SETTINGS_PATH = Path.home() / ".snip2md" / "settings.json"
 WORKSPACE_PATH = SETTINGS_PATH.parent / "workspace"
 CREATE_NO_WINDOW = 0x08000000
 _HOTKEY_CHARS = re.compile(r"^[a-z0-9+]{3,24}$")
+_CLAUDE_STATUS_TTL = 20.0
+_claude_status_cache: tuple[float, dict | None] | None = None
+
+
+def _hidden_kwargs(kwargs: dict) -> dict:
+    """Keep helper processes from flashing a console on Windows."""
+    if sys.platform != "win32":
+        return kwargs
+    merged = dict(kwargs)
+    merged["creationflags"] = int(merged.get("creationflags") or 0) | CREATE_NO_WINDOW
+    info = merged.get("startupinfo")
+    if info is None:
+        info = subprocess.STARTUPINFO()
+    info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    info.wShowWindow = 0
+    merged["startupinfo"] = info
+    return merged
 
 _cursor_lock = threading.Lock()
 _settings_lock = threading.Lock()
@@ -138,6 +155,12 @@ def _patch_windows_bridge_discovery() -> None:
 
     if getattr(bridge._read_discovery, "_snip2md_windows", False):
         return
+    _orig_popen = bridge.subprocess.Popen
+
+    def _hidden_popen(*args, **kwargs):
+        return _orig_popen(*args, **_hidden_kwargs(kwargs))
+
+    bridge.subprocess.Popen = _hidden_popen
 
     def _read_discovery_windows(process, timeout: float):
         if process.stderr is None:
@@ -392,13 +415,14 @@ def reap_snip2md_bridges() -> None:
         return
     env = os.environ.copy()
     env["SNIP2MD_BRIDGE_MARK"] = marker
-    flags = CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
         subprocess.run(
             [
                 "powershell",
                 "-NoProfile",
                 "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
                 "-Command",
                 (
                     "Get-CimInstance Win32_Process | "
@@ -411,9 +435,9 @@ def reap_snip2md_bridges() -> None:
             ],
             env=env,
             timeout=20,
-            creationflags=flags,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            **_hidden_kwargs({}),
         )
     except (OSError, subprocess.TimeoutExpired):
         pass
@@ -544,25 +568,41 @@ def claude_executable() -> str | None:
 
 
 def claude_auth_status() -> dict | None:
+    global _claude_status_cache
+    now = time.monotonic()
+    if (
+        _claude_status_cache is not None
+        and now - _claude_status_cache[0] < _CLAUDE_STATUS_TTL
+    ):
+        return _claude_status_cache[1]
     exe = claude_executable()
     if not exe:
+        _claude_status_cache = (now, None)
         return None
     try:
+        argv = [exe, "auth", "status", "--json"]
+        if sys.platform == "win32" and exe.lower().endswith((".cmd", ".bat")):
+            argv = [os.environ.get("COMSPEC") or "cmd.exe", "/d", "/c", *argv]
         proc = subprocess.run(
-            [exe, "auth", "status", "--json"],
+            argv,
             capture_output=True,
             text=True,
             timeout=30,
+            **_hidden_kwargs({}),
         )
     except (OSError, subprocess.TimeoutExpired):
+        _claude_status_cache = (now, None)
         return None
-    if proc.returncode != 0 or not proc.stdout.strip():
-        return None
-    try:
-        data = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        return None
-    return data if isinstance(data, dict) else None
+    data: dict | None = None
+    if proc.returncode == 0 and proc.stdout.strip():
+        try:
+            parsed = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            data = parsed
+    _claude_status_cache = (now, data)
+    return data
 
 
 def has_claude_subscription() -> bool:
@@ -604,6 +644,7 @@ def login_claude_subscription() -> int:
 
 def start_claude_login() -> None:
     """Open Claude's normal terminal login in a new console window."""
+    global _claude_status_cache
     exe = claude_executable()
     if not exe:
         raise ProviderError(
@@ -614,6 +655,7 @@ def start_claude_login() -> None:
     if sys.platform == "win32":
         flags = subprocess.CREATE_NEW_CONSOLE
     subprocess.Popen([exe, "auth", "login", "--claudeai"], creationflags=flags)
+    _claude_status_cache = None
     set_preferred_provider("claude")
 
 

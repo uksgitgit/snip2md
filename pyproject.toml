@@ -9,7 +9,6 @@ description = "Snip a screen region and get GitHub-flavored Markdown on the clip
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
-authors = [{ name = "Ulrik" }]
 keywords = ["ocr", "markdown", "screenshot", "windows"]
 classifiers = [
   "Development Status :: 4 - Beta",
@@ -29,12 +28,12 @@ dependencies = [
   "onnxruntime>=1.17.0",
 ]
 
+[project.gui-scripts]
+snip2md = "snip2md:main"
+
 [project.urls]
 Homepage = "https://github.com/uksgitgit/snip2md"
 Issues = "https://github.com/uksgitgit/snip2md/issues"
-
-[project.gui-scripts]
-snip2md = "snip2md:main"
 
 [tool.setuptools]
 py-modules = ["snip2md", "ui", "layout", "ocr_local", "providers"]
