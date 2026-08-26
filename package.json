@@ -1,0 +1,9 @@
+{
+  "name": "snip2md",
+  "private": true,
+  "type": "module",
+  "description": "Browser login for Cursor subscription (no API key paste)",
+  "dependencies": {
+    "@cursor/sdk": "^1.0.28"
+  }
+}

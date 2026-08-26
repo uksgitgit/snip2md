@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+node_modules/
+dist/
+build/
+.idea/
+.vscode/
+.env
+.env.*
+*.onnx
+last-error.txt
