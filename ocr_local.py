@@ -1,14 +1,15 @@
 """Local OCR — no cloud, no subscription.
 
 Primary engine is RapidOCR with a Latin recognition model
-(typically well under a second after warmup). Windows.Media.Ocr is
-the fallback. Layout uses word/line boxes so three-column dashboards are
-not read left-to-right.
+(typically well under a second after warmup). Windows.Media.Ocr or
+Apple Vision may refine afterwards. Layout uses word/line boxes so
+three-column dashboards are not read left-to-right.
 """
 
 from __future__ import annotations
 
 import asyncio
+import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -43,9 +44,9 @@ def image_to_markdown_ocr(
 ) -> str:
     """Local OCR → Markdown.
 
-    RapidOCR is emitted first (clipboard can copy immediately). Windows OCR
-    runs next and replaces the result only when it is clearly better
-    (typically Danish æøå).
+    RapidOCR is emitted first (clipboard can copy immediately). System OCR
+    (Windows.Media.Ocr or Apple Vision) runs next and replaces the result
+    only when it is clearly better (typically Danish æøå).
     """
     rgb = pil_image.convert("RGB")
     rapid_error: BaseException | None = None
@@ -58,8 +59,8 @@ def image_to_markdown_ocr(
         markdown = words_to_markdown(rapid_words, rgb.width, rgb.height)
         if markdown and on_markdown:
             on_markdown(markdown)
-        windows_words = _try_windows_words(rgb)
-        chosen = _prefer_words(rapid_words, windows_words)
+        system_words = _try_system_words(rgb)
+        chosen = _prefer_words(rapid_words, system_words)
         if chosen is not rapid_words:
             refined = words_to_markdown(chosen, rgb.width, rgb.height)
             if refined and refined != markdown:
@@ -68,7 +69,7 @@ def image_to_markdown_ocr(
                 markdown = refined
         return markdown
     try:
-        text = _recognize_windows(rgb)
+        text = _recognize_system(rgb)
         if text and on_markdown:
             on_markdown(text)
         return text
@@ -80,7 +81,7 @@ def image_to_markdown_ocr(
         raise
     except Exception as exc:
         raise ProviderError(
-            "Windows OCR failed. Install a language pack, or sign in and use AI."
+            "System OCR failed. Try a larger region, or sign in and use AI."
         ) from exc
 
 
@@ -112,7 +113,7 @@ def _get_rapid_engine():
                 }
             )
         except Exception as exc:
-            _rapid_error = "RapidOCR could not load. Windows OCR will be used."
+            _rapid_error = "RapidOCR could not load. System OCR will be used."
             raise ProviderError(_rapid_error) from exc
         return _rapid_engine
 
@@ -146,6 +147,77 @@ def _prefer_words(rapid: list[Word], windows: list[Word]) -> list[Word]:
     if _ocr_quality(windows) > _ocr_quality(rapid):
         return windows
     return rapid
+
+
+def _try_system_words(rgb: Image.Image) -> list[Word]:
+    if sys.platform == "win32":
+        return _try_windows_words(rgb)
+    if sys.platform == "darwin":
+        return _try_vision_words(rgb)
+    return []
+
+
+def _recognize_system(rgb: Image.Image) -> str:
+    if sys.platform == "win32":
+        return _recognize_windows(rgb)
+    words = _try_vision_words(rgb)
+    if words:
+        return words_to_markdown(words, rgb.width, rgb.height)
+    raise ProviderError("OCR found no text in that region.")
+
+
+def _try_vision_words(rgb: Image.Image) -> list[Word]:
+    """Apple Vision when PyObjC is installed. RapidOCR still works without it."""
+    try:
+        import Vision
+        from Foundation import NSData
+    except ImportError:
+        return []
+    import io
+
+    buf = io.BytesIO()
+    rgb.save(buf, format="PNG")
+    payload = buf.getvalue()
+    data = NSData.dataWithBytes_length_(payload, len(payload))
+    request = Vision.VNRecognizeTextRequest.alloc().init()
+    try:
+        request.setRecognitionLevel_(0)
+        request.setUsesLanguageCorrection_(True)
+    except Exception:
+        pass
+    try:
+        request.setAutomaticallyDetectsLanguage_(True)
+    except Exception:
+        pass
+    handler = Vision.VNImageRequestHandler.alloc().initWithData_options_(data, None)
+    try:
+        ok = handler.performRequests_error_([request], None)
+    except Exception:
+        return []
+    if not ok:
+        return []
+    results = request.results()
+    if not results:
+        return []
+    width, height = rgb.size
+    words: list[Word] = []
+    for obs in results:
+        try:
+            candidates = obs.topCandidates_(1)
+            if not candidates:
+                continue
+            text = str(candidates[0].string() or "").strip()
+            if not text:
+                continue
+            box = obs.boundingBox()
+            box_w = float(box.size.width) * width
+            box_h = float(box.size.height) * height
+            x = float(box.origin.x) * width
+            y = (1.0 - float(box.origin.y) - float(box.size.height)) * height
+            words.append((y, x, max(box_w, 1.0), max(box_h, 1.0), text))
+        except Exception:
+            continue
+    return words
 
 
 def _try_windows_words(rgb: Image.Image) -> list[Word]:

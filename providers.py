@@ -18,6 +18,7 @@ import base64
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -82,6 +83,12 @@ def _hidden_kwargs(kwargs: dict) -> dict:
     info.wShowWindow = 0
     merged["startupinfo"] = info
     return merged
+
+
+def _open_mac_terminal(command: str) -> None:
+    """Show a Terminal window for interactive login. command is a shell line."""
+    script = f'tell application "Terminal" to do script {json.dumps(command)}'
+    subprocess.Popen(["osascript", "-e", script])
 
 _cursor_lock = threading.Lock()
 _settings_lock = threading.Lock()
@@ -545,21 +552,28 @@ def start_cursor_login() -> None:
             "Node.js is needed for Cursor sign-in. Install it from https://nodejs.org"
         )
     sdk = ROOT / "node_modules" / "@cursor" / "sdk"
-    flags = subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0
     script = ROOT / "cursor_login.mjs"
     if sdk.exists():
-        subprocess.Popen([node, str(script)], cwd=str(ROOT), creationflags=flags)
+        kwargs: dict = {"cwd": str(ROOT)}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
+        subprocess.Popen([node, str(script)], **kwargs)
     else:
         npm = shutil.which("npm") or shutil.which("npm.cmd")
         if not npm:
             raise ProviderError(
                 "npm was not found. Install Node.js from https://nodejs.org"
             )
-        subprocess.Popen(
-            ["cmd.exe", "/c", "npm install && node cursor_login.mjs && pause"],
-            cwd=str(ROOT),
-            creationflags=flags,
-        )
+        if sys.platform == "win32":
+            subprocess.Popen(
+                ["cmd.exe", "/c", "npm install && node cursor_login.mjs && pause"],
+                cwd=str(ROOT),
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+            )
+        else:
+            _open_mac_terminal(
+                f"cd {shlex.quote(str(ROOT))} && npm install && node cursor_login.mjs"
+            )
     set_preferred_provider("cursor")
 
 
@@ -651,10 +665,13 @@ def start_claude_login() -> None:
             "Claude Code is not installed.\n"
             f"Install it from {CLAUDE_SETUP}"
         )
-    flags = 0
     if sys.platform == "win32":
-        flags = subprocess.CREATE_NEW_CONSOLE
-    subprocess.Popen([exe, "auth", "login", "--claudeai"], creationflags=flags)
+        subprocess.Popen(
+            [exe, "auth", "login", "--claudeai"],
+            creationflags=subprocess.CREATE_NEW_CONSOLE,
+        )
+    else:
+        _open_mac_terminal(f"{shlex.quote(exe)} auth login --claudeai")
     _claude_status_cache = None
     set_preferred_provider("claude")
 

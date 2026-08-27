@@ -6,7 +6,7 @@ Runs locally. Uses the Claude subscription you already sign in with
 (`claude auth login`). No API keys.
 
     python snip2md.py
-    or double-click "Start Snip2MD.bat"
+    or double-click "Start Snip2MD.bat" / "Start Snip2MD.command"
 
 The window opens. Change the shortcut there, or press the saved combo.
 """
@@ -21,7 +21,6 @@ import queue
 import sys
 import threading
 import time
-from ctypes import wintypes
 
 import pyperclip
 from PIL import Image, ImageGrab
@@ -44,62 +43,18 @@ MAX_BYTES = 1_200_000
 MUTEX_NAME = "Local\\Snip2MD.app"
 ERROR_ALREADY_EXISTS = 183
 SW_RESTORE = 9
+IS_WIN = sys.platform == "win32"
+IS_MAC = sys.platform == "darwin"
 
-user32 = ctypes.windll.user32
-kernel32 = ctypes.windll.kernel32
-SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN = 76, 77
-SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 78, 79
-user32.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
-user32.RegisterHotKey.restype = wintypes.BOOL
-user32.UnregisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int]
-user32.UnregisterHotKey.restype = wintypes.BOOL
-user32.PeekMessageW.argtypes = [
-    ctypes.POINTER(wintypes.MSG),
-    wintypes.HWND,
-    wintypes.UINT,
-    wintypes.UINT,
-    wintypes.UINT,
-]
-user32.PeekMessageW.restype = wintypes.BOOL
-user32.TranslateMessage.argtypes = [ctypes.POINTER(wintypes.MSG)]
-user32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
-kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
-kernel32.CreateMutexW.restype = wintypes.HANDLE
-kernel32.GetLastError.restype = wintypes.DWORD
-user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
-user32.FindWindowW.restype = wintypes.HWND
-user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
-user32.ShowWindow.restype = wintypes.BOOL
-user32.SetForegroundWindow.argtypes = [wintypes.HWND]
-user32.SetForegroundWindow.restype = wintypes.BOOL
-user32.GetKeyState.argtypes = [ctypes.c_int]
-user32.GetKeyState.restype = ctypes.c_short
-user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
-user32.GetAsyncKeyState.restype = ctypes.c_short
-kernel32.GetCurrentThreadId.restype = wintypes.DWORD
-user32.PostThreadMessageW.argtypes = [
-    wintypes.DWORD,
-    wintypes.UINT,
-    wintypes.WPARAM,
-    wintypes.LPARAM,
-]
-user32.PostThreadMessageW.restype = wintypes.BOOL
-user32.MsgWaitForMultipleObjects.argtypes = [
-    wintypes.DWORD,
-    ctypes.c_void_p,
-    wintypes.BOOL,
-    wintypes.DWORD,
-    wintypes.DWORD,
-]
-user32.MsgWaitForMultipleObjects.restype = wintypes.DWORD
-
-VK_SHIFT, VK_CONTROL, VK_MENU = 0x10, 0x11, 0x12
-VK_LWIN, VK_RWIN = 0x5B, 0x5C
 HOTKEY_ID = 1
 WM_HOTKEY = 0x0312
 WM_QUIT = 0x0012
 WM_USER = 0x0400
 QS_ALLINPUT = 0x04FF
+VK_SHIFT, VK_CONTROL, VK_MENU = 0x10, 0x11, 0x12
+VK_LWIN, VK_RWIN = 0x5B, 0x5C
+SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN = 76, 77
+SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 78, 79
 # Tk KeyPress.state on Windows (tkWinX.c GetState):
 #   0x0001 Shift, 0x0004 Control, 0x20000 Alt (ALT_MASK).
 #   0x0008 is Mod1Mask = NumLock, not Alt.
@@ -124,13 +79,104 @@ _MOD_KEYSYMS = {
     "Caps_Lock",
 }
 
+user32 = None
+kernel32 = None
+wintypes = None
+
+if IS_WIN:
+    from ctypes import wintypes as _wintypes
+
+    wintypes = _wintypes
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    user32.RegisterHotKey.argtypes = [
+        wintypes.HWND,
+        ctypes.c_int,
+        wintypes.UINT,
+        wintypes.UINT,
+    ]
+    user32.RegisterHotKey.restype = wintypes.BOOL
+    user32.UnregisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.UnregisterHotKey.restype = wintypes.BOOL
+    user32.PeekMessageW.argtypes = [
+        ctypes.POINTER(wintypes.MSG),
+        wintypes.HWND,
+        wintypes.UINT,
+        wintypes.UINT,
+        wintypes.UINT,
+    ]
+    user32.PeekMessageW.restype = wintypes.BOOL
+    user32.TranslateMessage.argtypes = [ctypes.POINTER(wintypes.MSG)]
+    user32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
+    kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel32.CreateMutexW.restype = wintypes.HANDLE
+    kernel32.GetLastError.restype = wintypes.DWORD
+    user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+    user32.FindWindowW.restype = wintypes.HWND
+    user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.ShowWindow.restype = wintypes.BOOL
+    user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+    user32.SetForegroundWindow.restype = wintypes.BOOL
+    user32.GetKeyState.argtypes = [ctypes.c_int]
+    user32.GetKeyState.restype = ctypes.c_short
+    user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+    user32.GetAsyncKeyState.restype = ctypes.c_short
+    kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+    user32.PostThreadMessageW.argtypes = [
+        wintypes.DWORD,
+        wintypes.UINT,
+        wintypes.WPARAM,
+        wintypes.LPARAM,
+    ]
+    user32.PostThreadMessageW.restype = wintypes.BOOL
+    user32.MsgWaitForMultipleObjects.argtypes = [
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.BOOL,
+        wintypes.DWORD,
+        wintypes.DWORD,
+    ]
+    user32.MsgWaitForMultipleObjects.restype = wintypes.DWORD
+
+
+def _require_desktop_os() -> None:
+    if not IS_WIN and not IS_MAC:
+        raise ProviderError("Snip2MD supports Windows and macOS.")
+
 
 def virtual_screen_bounds():
+    if IS_MAC:
+        from mac_host import virtual_screen_bounds as _mac_bounds
+
+        return _mac_bounds()
+    if not IS_WIN:
+        _require_desktop_os()
     x = user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
     y = user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
     w = user32.GetSystemMetrics(SM_CXVIRTUALSCREEN)
     h = user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
     return x, y, x + w, y + h
+
+
+def grab_region(bbox: tuple[int, int, int, int]):
+    if IS_MAC:
+        from mac_host import grab_region as _mac_grab
+
+        return _mac_grab(bbox)
+    return ImageGrab.grab(bbox=bbox, all_screens=True)
+
+
+def paste_shortcut() -> str:
+    return "Cmd+V" if IS_MAC else "Ctrl+V"
+
+
+def hotkey_capture_hint() -> str:
+    if IS_MAC:
+        return (
+            "Hold Control, Option, or Command plus a letter, digit, or F-key. "
+            "Esc cancels."
+        )
+    return "Hold Ctrl, Alt, or Win plus a letter, digit, or F-key. Esc cancels."
 
 
 class SnipOverlay:
@@ -163,7 +209,13 @@ class SnipOverlay:
         self.canvas.bind("<B1-Motion>", self.on_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
         self.root.bind("<Escape>", self.on_cancel)
+        self.canvas.bind("<Escape>", self.on_cancel)
         self.root.focus_force()
+        self.canvas.focus_set()
+        if IS_MAC:
+            self.root.update_idletasks()
+            self.root.lift()
+            self.root.attributes("-topmost", True)
 
     def on_press(self, event):
         self.start = (event.x, event.y)
@@ -234,7 +286,7 @@ def do_snip():
             return
 
         print("Captured — reading text locally...")
-        img = ImageGrab.grab(bbox=bbox, all_screens=True)
+        img = grab_region(bbox)
 
         def on_markdown(text: str) -> None:
             pyperclip.copy(text)
@@ -270,7 +322,11 @@ def do_snip():
 
 
 def claim_single_instance() -> bool:
-    """True if this process owns the Snip2MD mutex."""
+    """True if this process owns the Snip2MD mutex / lock."""
+    if IS_MAC:
+        from mac_host import claim_single_instance as _mac_claim
+
+        return _mac_claim()
     global _mutex_handle
     handle = kernel32.CreateMutexW(None, False, MUTEX_NAME)
     if not handle:
@@ -280,6 +336,11 @@ def claim_single_instance() -> bool:
 
 
 def focus_existing_window() -> None:
+    if IS_MAC:
+        from mac_host import focus_existing_window as _mac_focus
+
+        _mac_focus()
+        return
     hwnd = user32.FindWindowW(None, "Snip2MD")
     if not hwnd:
         return
@@ -287,35 +348,82 @@ def focus_existing_window() -> None:
     user32.SetForegroundWindow(hwnd)
 
 
-def format_hotkey(spec: str) -> str:
-    return spec.replace("+", " + ").upper()
-
-
-def parse_hotkey(spec: str) -> tuple[int, int]:
-    """Map 'ctrl+alt+m' to RegisterHotKey modifiers and a virtual-key code."""
-    mods = 0
-    vk: int | None = None
+def parse_hotkey_parts(spec: str) -> tuple[list[str], str]:
+    """Map 'ctrl+alt+m' to ordered modifiers and a key name."""
+    mods: list[str] = []
+    key: str | None = None
     for part in spec.lower().replace(" ", "").split("+"):
+        if not part:
+            continue
         if part in ("ctrl", "control"):
-            mods |= 0x0002
-        elif part == "alt":
-            mods |= 0x0001
+            mods.append("ctrl")
+        elif part in ("alt", "option"):
+            mods.append("alt")
         elif part == "shift":
-            mods |= 0x0004
-        elif part in ("win", "windows"):
-            mods |= 0x0008
+            mods.append("shift")
+        elif part in ("win", "windows", "cmd", "command", "super"):
+            mods.append("win")
         elif part in _FKEYS:
-            vk = _FKEYS[part]
+            if key is not None:
+                raise ProviderError("Hotkey needs a single letter, digit, or F-key.")
+            key = part
         elif len(part) == 1 and part.isalnum():
-            vk = ord(part.upper())
+            if key is not None:
+                raise ProviderError("Hotkey needs a single letter, digit, or F-key.")
+            key = part
         else:
             raise ProviderError(
                 f"Unsupported hotkey part '{part}'. Use e.g. ctrl+alt+m"
             )
-    if vk is None:
+    if key is None:
         raise ProviderError("Hotkey needs a letter, digit, or F-key.")
-    if not (mods & (0x0001 | 0x0002 | 0x0008)):
+    ordered = [name for name in ("ctrl", "alt", "shift", "win") if name in mods]
+    if not any(name in ordered for name in ("ctrl", "alt", "win")):
+        if IS_MAC:
+            raise ProviderError("Shortcut needs Control, Option, or Command.")
         raise ProviderError("Shortcut needs Ctrl, Alt, or Win.")
+    return ordered, key
+
+
+def format_hotkey(spec: str) -> str:
+    try:
+        parts, key = parse_hotkey_parts(spec)
+    except ProviderError:
+        return spec.replace("+", " + ").upper()
+    if IS_MAC:
+        labels = {
+            "ctrl": "Control",
+            "alt": "Option",
+            "shift": "Shift",
+            "win": "Command",
+        }
+        return " + ".join([*[labels[part] for part in parts], key.upper()])
+    labels = {"ctrl": "Ctrl", "alt": "Alt", "shift": "Shift", "win": "Win"}
+    return " + ".join([*[labels[part] for part in parts], key.upper()])
+
+
+def parse_hotkey(spec: str):
+    """Validate a shortcut. On Windows also return RegisterHotKey (mods, vk)."""
+    parts, key = parse_hotkey_parts(spec)
+    if IS_WIN:
+        return _windows_mods_vk(parts, key)
+    return parts, key
+
+
+def _windows_mods_vk(parts: list[str], key: str) -> tuple[int, int]:
+    mods = 0
+    if "ctrl" in parts:
+        mods |= 0x0002
+    if "alt" in parts:
+        mods |= 0x0001
+    if "shift" in parts:
+        mods |= 0x0004
+    if "win" in parts:
+        mods |= 0x0008
+    if key in _FKEYS:
+        vk = _FKEYS[key]
+    else:
+        vk = ord(key.upper())
     return mods | 0x4000, vk  # MOD_NOREPEAT
 
 
@@ -325,7 +433,7 @@ def _key_held(vk: int) -> bool:
     return user32.GetKeyState(vk) < 0 or user32.GetAsyncKeyState(vk) < 0
 
 
-class HotkeyListener(threading.Thread):
+class _WindowsHotkeyListener(threading.Thread):
     """RegisterHotKey on a private thread so Tk never sees WM_HOTKEY.
 
     A Python WndProc dispatched from Tcl's DispatchMessage crashes with
@@ -414,8 +522,36 @@ class HotkeyListener(threading.Thread):
         self.join(timeout=2.0)
 
 
+class _UnsupportedHotkeyListener:
+    def __init__(self) -> None:
+        _require_desktop_os()
+
+    fired = threading.Event()
+
+    def register(self, spec: str) -> bool:
+        return False
+
+    def unregister(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+
+if IS_WIN:
+    HotkeyListener = _WindowsHotkeyListener
+elif IS_MAC:
+    from mac_host import HotkeyListener
+else:
+    HotkeyListener = _UnsupportedHotkeyListener
+
+
 def hotkey_modifiers_held() -> list[str]:
-    """Physical modifiers from Windows — not Tk's NumLock-as-Mod1 bitmask."""
+    """Physical modifiers — not Tk's NumLock-as-Mod1 bitmask."""
+    if IS_MAC:
+        from mac_host import hotkey_modifiers_held as _mac_mods
+
+        return _mac_mods()
     parts: list[str] = []
     if _key_held(VK_CONTROL):
         parts.append("ctrl")
@@ -450,7 +586,12 @@ def hotkey_from_event(event) -> str | None:
 
 
 def listen_hotkey(spec: str, callback) -> None:
-    """Register one global combo via RegisterHotKey — not a keylogger hook."""
+    """Register one global combo — not a keylogger hook."""
+    if IS_MAC:
+        from mac_host import listen_hotkey as _mac_listen
+
+        _mac_listen(spec, callback)
+        return
     mods, vk = parse_hotkey(spec)
     if not user32.RegisterHotKey(None, 1, mods, vk):
         raise ProviderError(
@@ -500,8 +641,8 @@ def cmd_login() -> int:
 
 
 def cmd_run_cli() -> int:
-    if sys.platform != "win32":
-        print("error: snip2md is Windows-only (screen coordinates use Win32 APIs)")
+    if not IS_WIN and not IS_MAC:
+        print("error: snip2md supports Windows and macOS")
         return 1
 
     try:
@@ -538,7 +679,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _detach_windows_console() -> None:
     """Drop the launcher console so python.exe does not leave a terminal open."""
-    if sys.platform != "win32":
+    if not IS_WIN:
         return
     try:
         kernel32.FreeConsole()
@@ -557,6 +698,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if command == "cli":
         return cmd_run_cli()
+    if not IS_WIN and not IS_MAC:
+        print("error: snip2md supports Windows and macOS")
+        return 1
     _detach_windows_console()
     from ui import run_app
 

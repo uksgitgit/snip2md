@@ -2,6 +2,6 @@ pillow>=10
 pyperclip>=1.8
 claude-agent-sdk==0.2.144
 cursor-sdk==1.0.28
-winocr>=0.0.15
+winocr>=0.0.15; sys_platform == "win32"
 rapidocr>=3.0.0
 onnxruntime>=1.17.0

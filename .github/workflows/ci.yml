@@ -5,13 +5,22 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   compile:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Syntax check
-        run: python -m compileall -q -f snip2md.py ui.py layout.py ocr_local.py providers.py
+        run: python -m compileall -q -f snip2md.py ui.py layout.py ocr_local.py providers.py mac_host.py
+      - name: Win32 APIs stay behind the Windows gate
+        run: python -c "import pathlib; t=pathlib.Path('snip2md.py').read_text(); head=t.split('IS_WIN = sys.platform')[0]; assert 'ctypes.windll' not in head; assert 'from ctypes import wintypes' not in head"

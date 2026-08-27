@@ -9,12 +9,14 @@ description = "Snip a screen region and get GitHub-flavored Markdown on the clip
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
-keywords = ["ocr", "markdown", "screenshot", "windows"]
+keywords = ["ocr", "markdown", "screenshot", "windows", "macos"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Environment :: Win32 (MS Windows)",
+  "Environment :: MacOS X",
   "License :: OSI Approved :: MIT License",
   "Operating System :: Microsoft :: Windows",
+  "Operating System :: MacOS",
   "Programming Language :: Python :: 3",
   "Topic :: Multimedia :: Graphics :: Capture :: Screen Capture",
 ]
@@ -23,10 +25,13 @@ dependencies = [
   "pyperclip>=1.8",
   "claude-agent-sdk==0.2.144",
   "cursor-sdk==1.0.28",
-  "winocr>=0.0.15",
+  "winocr>=0.0.15; sys_platform == 'win32'",
   "rapidocr>=3.0.0",
   "onnxruntime>=1.17.0",
 ]
+
+[project.optional-dependencies]
+apple = ["pyobjc-framework-Vision>=10.0"]
 
 [project.gui-scripts]
 snip2md = "snip2md:main"
@@ -36,4 +41,4 @@ Homepage = "https://github.com/uksgitgit/snip2md"
 Issues = "https://github.com/uksgitgit/snip2md/issues"
 
 [tool.setuptools]
-py-modules = ["snip2md", "ui", "layout", "ocr_local", "providers"]
+py-modules = ["snip2md", "ui", "layout", "ocr_local", "providers", "mac_host"]

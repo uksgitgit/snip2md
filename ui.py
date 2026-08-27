@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import ctypes
+import sys
 import threading
 import time
 import tkinter as tk
 from tkinter import font as tkfont
 
 import pyperclip
-from PIL import ImageGrab
 from ocr_local import image_to_markdown_ocr, warmup_ocr
 
 from providers import (
@@ -40,8 +40,11 @@ from snip2md import (
     encode_screenshot,
     focus_existing_window,
     format_hotkey,
+    grab_region,
+    hotkey_capture_hint,
     hotkey_from_event,
     parse_hotkey,
+    paste_shortcut,
 )
 
 BG = "#F3F4F6"
@@ -83,10 +86,18 @@ class Snip2MdApp:
         self.root.configure(bg=BG)
         self.root.geometry("400x760+80+60")
         self.root.minsize(360, 680)
-        try:
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("snip2md.app")
-        except Exception:
-            pass
+        if sys.platform == "win32":
+            try:
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                    "snip2md.app"
+                )
+            except Exception:
+                pass
+        elif sys.platform == "darwin":
+            try:
+                self.root.createcommand("tk::mac::Quit", self._quit)
+            except tk.TclError:
+                pass
 
         self.busy = False
         self.last_markdown = ""
@@ -110,7 +121,8 @@ class Snip2MdApp:
         self.root.protocol("WM_DELETE_WINDOW", self._quit)
 
     def _fonts(self) -> None:
-        family = "Segoe UI"
+        family = "Helvetica Neue" if sys.platform == "darwin" else "Segoe UI"
+        mono = "Menlo" if sys.platform == "darwin" else "Cascadia Mono"
         self.font_kicker = tkfont.Font(family=family, size=11)
         self.font_title = tkfont.Font(family=family, size=32, weight="bold")
         self.font_card = tkfont.Font(family=family, size=15, weight="bold")
@@ -118,7 +130,7 @@ class Snip2MdApp:
         self.font_small = tkfont.Font(family=family, size=10)
         self.font_button = tkfont.Font(family=family, size=12, weight="bold")
         self.font_fab = tkfont.Font(family=family, size=22, weight="bold")
-        self.font_mono = tkfont.Font(family="Cascadia Mono", size=10)
+        self.font_mono = tkfont.Font(family=mono, size=10)
 
     def _build(self) -> None:
         shell = tk.Frame(self.root, bg=BG, padx=24, pady=22)
@@ -386,6 +398,8 @@ class Snip2MdApp:
     def _bind_keys(self) -> None:
         self.root.bind("<Return>", lambda _e: self.start_snip())
         self.root.bind("<Control-c>", lambda _e: self.copy_last())
+        if sys.platform == "darwin":
+            self.root.bind("<Command-c>", lambda _e: self.copy_last())
         self.root.bind("<Escape>", self._on_escape)
         self.root.bind("<KeyPress>", self._on_hotkey_key)
 
@@ -528,7 +542,7 @@ class Snip2MdApp:
         self._unregister_hotkey()
         self.hotkey_var.set("Press the new shortcut…")
         self.hotkey_btn.configure(text="Cancel")
-        self.note_var.set("Hold Ctrl, Alt, or Win plus a letter, digit, or F-key. Esc cancels.")
+        self.note_var.set(hotkey_capture_hint())
 
     def _cancel_hotkey_capture(self) -> None:
         self._capturing_hotkey = False
@@ -607,7 +621,7 @@ class Snip2MdApp:
         grab_error = None
         if bbox is not None:
             try:
-                img = ImageGrab.grab(bbox=bbox, all_screens=True)
+                img = grab_region(bbox)
             except Exception as exc:
                 grab_error = exc
         self.root.deiconify()
@@ -616,7 +630,12 @@ class Snip2MdApp:
             self._idle("Cancelled.")
             return
         if img is None:
-            self._idle(public_error_message(grab_error or Exception("Could not capture.")))
+            if isinstance(grab_error, ProviderError):
+                self._idle(str(grab_error))
+            else:
+                self._idle(
+                    public_error_message(grab_error or Exception("Could not capture."))
+                )
             return
         self.snip_btn.configure(text="…")
         self.note_var.set("Reading text locally…")
@@ -693,7 +712,7 @@ class Snip2MdApp:
         self.preview.configure(state="disabled")
         if first:
             self._flash_copied()
-            self.note_var.set("Copied. Ctrl+V to paste.")
+            self.note_var.set(f"Copied. {paste_shortcut()} to paste.")
             if polish:
                 threading.Thread(
                     target=self._polish, args=(snip_id, img, markdown), daemon=True
@@ -722,7 +741,7 @@ class Snip2MdApp:
         if polish:
             self._idle("On the clipboard. AI polish running in the background…")
         else:
-            self._idle("On the clipboard. Ctrl+V to paste.")
+            self._idle(f"On the clipboard. {paste_shortcut()} to paste.")
 
     def _polish(self, snip_id: int, img, ocr_markdown: str) -> None:
         started = time.monotonic()
@@ -755,7 +774,7 @@ class Snip2MdApp:
             return
         if self._apply_markdown(markdown):
             self.note_var.set(
-                f"Copied structured Markdown in {elapsed:.1f}s. Ctrl+V to paste."
+                f"Copied structured Markdown in {elapsed:.1f}s. {paste_shortcut()} to paste."
             )
         else:
             self.note_var.set(
@@ -776,7 +795,7 @@ class Snip2MdApp:
         self._draw_rail()
 
     def _flash_copied(self) -> None:
-        self.copied_var.set("Ctrl+V")
+        self.copied_var.set(paste_shortcut())
         self._set_preview_theme(True)
         if self._copied_job is not None:
             self.root.after_cancel(self._copied_job)
@@ -820,7 +839,7 @@ class Snip2MdApp:
             self.note_var.set("Nothing to copy yet.")
             return
         if self._apply_markdown(self.last_markdown):
-            self.note_var.set("Copied again. Ctrl+V to paste.")
+            self.note_var.set(f"Copied again. {paste_shortcut()} to paste.")
         else:
             self.note_var.set("Clipboard copy failed. Select the text and copy.")
 

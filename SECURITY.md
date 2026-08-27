@@ -2,7 +2,7 @@
 
 Snip2MD captures whatever is on screen in the region you select.
 
-- Local OCR (RapidOCR / Windows OCR) stays on the PC.
+- Local OCR (RapidOCR / Windows OCR / Apple Vision) stays on the machine.
 - If **AI polish** is on, the screenshot is sent to Cursor or Claude under **your** signed-in account.
 - Do not snip password managers, bank pages, or anything you would not paste into those products.
 
