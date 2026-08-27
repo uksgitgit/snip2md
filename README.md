@@ -6,6 +6,8 @@ Local OCR by default (RapidOCR, typically well under a second after warmup). Opt
 
 **Repo:** [github.com/uksgitgit/snip2md](https://github.com/uksgitgit/snip2md)
 
+<video src="./share/snip2md-how-it-works.mp4" controls width="720"></video>
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ## Requirements
